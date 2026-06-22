@@ -91,15 +91,19 @@ final class NotchContentView: NSView {
 
     // Желаемый размер окна по состоянию: saved — узкий/высокий, остальное — широкий.
     var desiredWindowSize: NSSize {
-        let contentH: CGFloat
-        let blobW: CGFloat
-        switch state {
-        case .saved:
-            blobW = 340; contentH = 178 // по макету 23:49 (Frame1 178)
-        default:
-            blobW = 360; contentH = 80
+        if case .saved = state {
+            let panelW = max(metrics.notchWidth, 185)
+            let innerW = panelW - 16
+            let previewH = innerW * previewAspect
+            let panelContentH = 8 + 24 + 8 + previewH + 8
+            let n = folders.count
+            let folderColH: CGFloat = n > 0 ? 40 + CGFloat(n) * 32 + CGFloat(n - 1) * 8 : 0
+            let maxFolderW = folders.map { folderPillWidth($0.lastPathComponent) }.max() ?? 0
+            let halfW = max(panelW / 2 + sideGap + 32, panelW / 2 + sideGap + maxFolderW)
+            return NSSize(width: 2 * halfW, height: metrics.notchHeight + max(panelContentH, folderColH))
         }
-        return NSSize(width: blobW + 34, height: metrics.notchHeight + contentH)
+        // idle / targeted / error — notch-width: пилл пути(24)+gap8+плашка(80)+pad16.
+        return NSSize(width: max(metrics.notchWidth, 185), height: metrics.notchHeight + 128)
     }
 
     // Зона кнопки «Выбрать папку» (idle без папки) для клика.
@@ -500,70 +504,97 @@ final class NotchContentView: NSView {
         let b = bounds
         let filletR: CGFloat = 17
         let notchH = metrics.notchHeight
-        // Прогресс берём из текущей высоты окна (окно анимирует размер).
-        let progress = max(0, min(1, (b.height - notchH) / 80))
 
-        // Плашка = текущие границы окна; по краям поля под филлеты.
-        let blobRect = NSRect(x: filletR, y: 0, width: b.width - 2 * filletR, height: b.height)
-        let blobPath = bottomRoundedPath(in: blobRect, radius: 24)
-
-        if b.height > notchH + 1 {
-            NSGraphicsContext.current?.saveGraphicsState()
-            let shadow = NSShadow()
-            shadow.shadowColor = NSColor(white: 0, alpha: 0.12)
-            shadow.shadowOffset = NSSize(width: 0, height: -8)
-            shadow.shadowBlurRadius = 40
-            shadow.set()
-            panelBottom.setFill()
-            blobPath.fill()
-            NSGraphicsContext.current?.restoreGraphicsState()
-            if let gradient = NSGradient(starting: panelTop, ending: panelBottom) {
-                gradient.draw(in: blobPath, angle: 90)
-            }
-            drawFillets(blobRect: blobRect, radius: filletR)
+        // Новый saved — плавающие элементы, без монолитного блоба.
+        if case .saved(let info) = state {
+            NSColor.black.setFill()
+            let nw = min(metrics.notchWidth, b.width)
+            bottomRoundedPath(in: NSRect(x: b.midX - nw / 2, y: 0, width: nw, height: notchH), radius: 16).fill()
+            drawSavedFloating(in: b, notchH: notchH, info: info)
+            return
         }
 
-        // Чёрный таб челки поверх, низ r=16 — сливается с физической челкой.
+        // Чёрный таб челки.
         let notchW = min(metrics.notchWidth, b.width)
-        let notchRect = NSRect(x: b.midX - notchW / 2, y: 0, width: notchW, height: notchH)
         NSColor.black.setFill()
-        bottomRoundedPath(in: notchRect, radius: 16).fill()
+        bottomRoundedPath(in: NSRect(x: b.midX - notchW / 2, y: 0, width: notchW, height: notchH), radius: 16).fill()
 
-        // Контент проявляется во второй половине раскрытия, клипуется плашкой.
-        let contentAlpha = max(0, min(1, (progress - 0.35) / 0.65))
-        guard contentAlpha > 0.01, let ctx = NSGraphicsContext.current?.cgContext else { return }
+        // idle / targeted / error → плавающая drop-панель notch-width (макет 43:351).
+        guard b.height > notchH + 1 else { return }
+        drawDropFloating(in: b, notchH: notchH)
+    }
 
-        let content = NSRect(x: blobRect.minX + 8, y: notchH + 8,
-                             width: blobRect.width - 16, height: b.height - notchH - 16)
-        // Saved использует полную область под челкой (свои отступы по макету).
-        let savedArea = NSRect(x: blobRect.minX, y: notchH,
-                               width: blobRect.width, height: b.height - notchH)
+    // Плавающая drop-панель: пилл пути + тёмная плашка с пунктиром.
+    private func drawDropFloating(in b: NSRect, notchH: CGFloat) {
+        let cx = b.midX
+        let panelW = max(metrics.notchWidth, 185)
+        let innerLeft = cx - panelW / 2 + 8
+        let innerW = panelW - 16
+        let hasFolder = SaveManager.shared.destination != nil
 
-        ctx.saveGState()
-        blobPath.addClip()
-        ctx.setAlpha(contentAlpha)
-        defer { ctx.restoreGState() }
-
-        // Кнопку рисуем только в idle без папки.
-        if case .idle = state, SaveManager.shared.destination == nil {
-            drawChooseFolder(in: content)
-        } else {
+        // 1) Пилл пути / «Выбрать папку».
+        let pathPill = NSRect(x: innerLeft, y: notchH + 8, width: innerW, height: 24)
+        drawFloatingPill(pathPill, color: pillDark)
+        if hasFolder {
             chooseButtonRect = nil
+            let nameAttrs: [NSAttributedString.Key: Any] = [
+                .font: NSFont.systemFont(ofSize: 12, weight: .medium),
+                .foregroundColor: NSColor(white: 1, alpha: 0.85)
+            ]
+            let name = SaveManager.shared.destination?.lastPathComponent ?? ""
+            name.draw(at: NSPoint(x: pathPill.minX + 8, y: pathPill.midY - 7), withAttributes: nameAttrs)
+            if let loader = NSImage(systemSymbolName: "circle.dotted", accessibilityDescription: nil) {
+                let cfg = NSImage.SymbolConfiguration(pointSize: 12, weight: .regular)
+                loader.withSymbolConfiguration(cfg)?.tinting(with: NSColor(white: 1, alpha: 0.5))
+                    .draw(in: NSRect(x: pathPill.maxX - 4 - 16, y: pathPill.midY - 8, width: 16, height: 16),
+                          from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
+            }
+        } else {
+            chooseButtonRect = pathPill
+            let btnAttrs: [NSAttributedString.Key: Any] = [
+                .font: NSFont.systemFont(ofSize: 12, weight: .medium),
+                .foregroundColor: savedGreen
+            ]
+            "Выбрать папку".draw(at: NSPoint(x: pathPill.minX + 8, y: pathPill.midY - 7), withAttributes: btnAttrs)
         }
 
-        switch state {
-        case .idle:
-            if SaveManager.shared.destination != nil {
-                drawDropZone(in: content, label: "Drop the pic here",
-                             stroke: NSColor(white: 1, alpha: 0.3), text: .white, animated: false)
-            }
-        case .targeted:
-            drawDropZone(in: content, label: "Drop it", stroke: mint, text: mint, animated: true)
-        case .saved(let info):
-            drawSaved(in: savedArea, info: info)
-        case .error(let msg):
-            drawDropZone(in: content, label: msg, stroke: .systemRed, text: .systemRed, animated: false)
+        // 2) Тёмная плашка с пунктиром.
+        let blob = NSRect(x: innerLeft, y: pathPill.maxY + 8, width: innerW, height: 80)
+        let blobPath = NSBezierPath(roundedRect: blob, xRadius: 16, yRadius: 16)
+        NSGraphicsContext.current?.saveGraphicsState()
+        let sh = NSShadow()
+        sh.shadowColor = NSColor(white: 0, alpha: 0.12)
+        sh.shadowOffset = NSSize(width: 0, height: -8)
+        sh.shadowBlurRadius = 12
+        sh.set()
+        panelBottom.setFill()
+        blobPath.fill()
+        NSGraphicsContext.current?.restoreGraphicsState()
+        if let gradient = NSGradient(starting: panelTop, ending: panelBottom) {
+            gradient.draw(in: blobPath, angle: 90)
         }
+
+        // Пунктирная зона + текст по состоянию.
+        let label: String
+        let color: NSColor
+        var animated = false
+        switch state {
+        case .targeted: label = "Drop it"; color = mint; animated = true
+        case .error(let m): label = m; color = .systemRed
+        default: label = hasFolder ? "Drop the pic here" : "Сначала выбери папку"
+                 color = NSColor(white: 1, alpha: 0.9)
+        }
+        let inner = blob.insetBy(dx: 4, dy: 4)
+        let dashed = NSBezierPath(roundedRect: inner, xRadius: 12, yRadius: 12)
+        dashed.lineWidth = 1
+        dashed.setLineDash([6, 5], count: 2, phase: animated ? dashPhase : 0)
+        (animated ? mint : NSColor(white: 1, alpha: 0.3)).setStroke()
+        dashed.stroke()
+        let attrs: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 16, weight: .regular), .foregroundColor: color
+        ]
+        let sz = label.size(withAttributes: attrs)
+        label.draw(at: NSPoint(x: inner.midX - sz.width / 2, y: inner.midY - sz.height / 2), withAttributes: attrs)
     }
 
     private func drawDropZone(in rect: NSRect, label: String, stroke: NSColor, text: NSColor, animated: Bool) {
@@ -646,6 +677,90 @@ final class NotchContentView: NSView {
 
         // 3) Чипсы (pb8).
         drawChips(in: rect)
+    }
+
+    // MARK: - Новый плавающий saved (макет 43:367)
+
+    private let sideGap: CGFloat = 8
+    private let pillDark = NSColor(white: 0.0, alpha: 0.85) // тёмный фон пилла — читается на любом фоне
+    private let previewAspect: CGFloat = 2214.0 / 3420.0
+
+    private func folderPillWidth(_ name: String) -> CGFloat {
+        8 + 16 + 6 + name.size(withAttributes: chipNameAttrs).width + 12
+    }
+
+    private func drawFloatingPill(_ rect: NSRect, color: NSColor) {
+        NSGraphicsContext.current?.saveGraphicsState()
+        let sh = NSShadow()
+        sh.shadowColor = NSColor(white: 0, alpha: 0.18)
+        sh.shadowOffset = NSSize(width: 0, height: -2)
+        sh.shadowBlurRadius = 8
+        sh.set()
+        color.setFill()
+        NSBezierPath(roundedRect: rect, xRadius: 16, yRadius: 16).fill()
+        NSGraphicsContext.current?.restoreGraphicsState()
+    }
+
+    private func drawSavedFloating(in b: NSRect, notchH: CGFloat, info: SavedInfo) {
+        let cx = b.midX
+        let panelW = max(metrics.notchWidth, 185)
+        let panelLeft = cx - panelW / 2
+        let innerLeft = panelLeft + 8
+        let innerW = panelW - 16
+
+        // 1) Пилл «Saved»: тёмный фон, зелёный текст слева, check справа.
+        let pill = NSRect(x: innerLeft, y: notchH + 8, width: innerW, height: 24)
+        drawFloatingPill(pill, color: NSColor(white: 0, alpha: 0.9))
+        let savedAttrs: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 12, weight: .medium),
+            .foregroundColor: savedGreen
+        ]
+        "Saved".draw(at: NSPoint(x: pill.minX + 8, y: pill.midY - 7), withAttributes: savedAttrs)
+        drawAnimatedCheck(in: NSRect(x: pill.maxX - 4 - 16, y: pill.midY - 8, width: 16, height: 16),
+                          progress: checkProgress)
+
+        // 2) Превью (landscape), оверлей 0.2.
+        let previewH = innerW * previewAspect
+        let preview = NSRect(x: innerLeft, y: pill.maxY + 8, width: innerW, height: previewH)
+        drawFloatingPill(preview, color: NSColor(white: 0, alpha: 0.001)) // тень под превью
+        NSGraphicsContext.current?.saveGraphicsState()
+        NSBezierPath(roundedRect: preview, xRadius: 16, yRadius: 16).setClip()
+        if info.count > 1, !currentPreviews.isEmpty {
+            currentPreviews.first.map { drawCover($0, in: preview) }
+        } else if let p = currentPreviews.first {
+            drawCover(p, in: preview)
+        }
+        NSColor(white: 0, alpha: 0.2).setFill()
+        preview.fill()
+        NSGraphicsContext.current?.restoreGraphicsState()
+
+        // 3) ＋ слева от панели, на уровне превью.
+        let plus = NSRect(x: panelLeft - sideGap - 32, y: preview.minY, width: 32, height: 32)
+        plusChipRect = plus
+        drawFloatingPill(plus, color: pillDark)
+        addFolderImage?.draw(in: NSRect(x: plus.midX - 8, y: plus.midY - 8, width: 16, height: 16),
+                             from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
+
+        // 4) Колонка папок справа, вертикально.
+        folderChipRects = []
+        let colX = panelLeft + panelW + sideGap
+        var y = preview.minY
+        for f in folders {
+            let nm = f.lastPathComponent
+            let w = folderPillWidth(nm)
+            let chip = NSRect(x: colX, y: y, width: w, height: 32)
+            drawFloatingPill(chip, color: pillDark)
+            let iconRect = NSRect(x: chip.minX + 8, y: chip.midY - 8, width: 16, height: 16)
+            if movedFolder == nm {
+                drawIconPop(approveFolderGreen, in: iconRect, progress: chipCheckProgress)
+            } else {
+                folderImage?.draw(in: iconRect, from: .zero, operation: .sourceOver,
+                                  fraction: 1, respectFlipped: true, hints: nil)
+            }
+            nm.draw(at: NSPoint(x: iconRect.maxX + 6, y: chip.midY - 7), withAttributes: chipNameAttrs)
+            folderChipRects.append((chip, nm))
+            y += 32 + 8
+        }
     }
 
     // Чипсы (по макету 23:79): центрированная группа; при переполнении — ＋ слева + скролл.
