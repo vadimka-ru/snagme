@@ -40,6 +40,7 @@ final class NotchContentView: NSView {
 
     func savedPreview() -> NSImage? { currentPreviews.first }
     func restartEntrance() { startSavedEntrance() }
+    func captureURLs(_ urls: [URL]) { handleSaved(sources: urls) }
 
     // Анимация «разлёта» элементов saved.
     private var savedEntranceStart: CFTimeInterval = 0

@@ -94,10 +94,17 @@ final class NotchWindow: NSWindow {
         let imgs = pb.readObjects(forClasses: [NSImage.self], options: nil) as? [NSImage]
         NSLog("SnagMe ⌥Space: drag pb → urls=\(urls.map { $0.lastPathComponent }), images=\(imgs?.count ?? 0)")
 
-        guard contentViewCustom.handlePasteboard(pb, fromHotkey: true) else { return }
-        contentViewCustom.holdOpen(6.0) // не сворачивать во время полёта + после
+        if contentViewCustom.handlePasteboard(pb, fromHotkey: true) {
+            presentCapture()
+        } else if let shot = latestScreenshot() {
+            // Драг пуст, но недавно сделан скриншот — берём файл с диска.
+            contentViewCustom.captureURLs([shot])
+            presentCapture()
+        }
+    }
 
-        // Полёт миниатюры от курсора в челку → затем раскрытие панели.
+    private func presentCapture() {
+        contentViewCustom.holdOpen(6.0)
         let start = NSEvent.mouseLocation
         let notchPt = NSPoint(x: metrics.screenFrame.midX,
                               y: metrics.screenFrame.maxY - metrics.notchHeight / 2)
@@ -108,6 +115,27 @@ final class NotchWindow: NSWindow {
         } else {
             presentAfterFly()
         }
+    }
+
+    // Новейший скриншот/картинка из папки скриншотов за последние 20с.
+    private func latestScreenshot() -> URL? {
+        let loc: URL = {
+            if let p = UserDefaults(suiteName: "com.apple.screencapture")?.string(forKey: "location"), !p.isEmpty {
+                return URL(fileURLWithPath: (p as NSString).expandingTildeInPath)
+            }
+            return FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Desktop")
+        }()
+        let exts: Set<String> = ["png", "jpg", "jpeg", "heic", "tiff", "gif"]
+        guard let items = try? FileManager.default.contentsOfDirectory(
+            at: loc, includingPropertiesForKeys: [.creationDateKey], options: [.skipsHiddenFiles]) else { return nil }
+        return items
+            .filter { exts.contains($0.pathExtension.lowercased()) }
+            .compactMap { url -> (URL, Date)? in
+                guard let d = try? url.resourceValues(forKeys: [.creationDateKey]).creationDate else { return nil }
+                return (url, d)
+            }
+            .filter { Date().timeIntervalSince($0.1) < 20 }
+            .max { $0.1 < $1.1 }?.0
     }
 
     private func presentAfterFly() {
