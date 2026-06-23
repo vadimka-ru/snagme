@@ -7,7 +7,15 @@ let package = Package(
     targets: [
         .executableTarget(
             name: "SnagMe",
-            path: "Sources/SnagMe"
+            path: "Sources/SnagMe",
+            resources: [
+                .process("Resources/MenuIcon.svg"),
+                .process("Resources/Loader.svg"),
+                .process("Resources/Check.svg"),
+                .process("Resources/AddFolder.svg"),
+                .process("Resources/Folder.svg"),
+                .process("Resources/ApproveFolder.svg"),
+            ]
         )
     ]
 )

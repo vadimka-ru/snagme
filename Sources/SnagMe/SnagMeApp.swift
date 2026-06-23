@@ -45,7 +45,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if let button = item.button {
-            if let url = Bundle.main.url(forResource: "MenuIcon", withExtension: "svg"),
+            if let url = Bundle.module.url(forResource: "MenuIcon", withExtension: "svg"),
                let icon = NSImage(contentsOf: url) {
                 icon.size = NSSize(width: 18, height: 18)
                 icon.isTemplate = true // macOS перекрасит под тему бара

@@ -338,26 +338,26 @@ final class NotchContentView: NSView {
 
     // Иконка-галочка из ресурсов (.app). В debug-сборке без бандла — nil.
     private lazy var checkImage: NSImage? = {
-        guard let url = Bundle.main.url(forResource: "Check", withExtension: "svg") else { return nil }
+        guard let url = Bundle.module.url(forResource: "Check", withExtension: "svg") else { return nil }
         return NSImage(contentsOf: url)
     }()
 
     // Иконка «добавить папку» для кнопки выбора.
     private lazy var addFolderImage: NSImage? = {
-        guard let url = Bundle.main.url(forResource: "AddFolder", withExtension: "svg") else { return nil }
+        guard let url = Bundle.module.url(forResource: "AddFolder", withExtension: "svg") else { return nil }
         return NSImage(contentsOf: url)
     }()
     private lazy var folderImage: NSImage? = {
-        guard let url = Bundle.main.url(forResource: "Folder", withExtension: "svg") else { return nil }
+        guard let url = Bundle.module.url(forResource: "Folder", withExtension: "svg") else { return nil }
         return NSImage(contentsOf: url)
     }()
     private lazy var approveFolderImage: NSImage? = {
-        guard let url = Bundle.main.url(forResource: "ApproveFolder", withExtension: "svg") else { return nil }
+        guard let url = Bundle.module.url(forResource: "ApproveFolder", withExtension: "svg") else { return nil }
         return NSImage(contentsOf: url)
     }()
     private lazy var approveFolderGreen: NSImage? = approveFolderImage?.tinting(with: savedGreen)
     private lazy var loaderImage: NSImage? = {
-        guard let url = Bundle.main.url(forResource: "Loader", withExtension: "svg") else { return nil }
+        guard let url = Bundle.module.url(forResource: "Loader", withExtension: "svg") else { return nil }
         return NSImage(contentsOf: url)
     }()
 
@@ -991,8 +991,7 @@ final class NotchContentView: NSView {
 
     private func rootPathLabel() -> String {
         guard let dest = SaveManager.shared.destination else { return "Выбрать папку" }
-        let home = NSHomeDirectory()
-        return dest.path.hasPrefix(home) ? "~" + dest.path.dropFirst(home.count) : dest.lastPathComponent
+        return "~/" + dest.lastPathComponent
     }
 
     // Контент «крыльев» челки-полосы: слева имя/Saved, справа лоадер/check.
@@ -1056,6 +1055,7 @@ final class NotchContentView: NSView {
         let pp = ensurePlusPill()
         pp.isHidden = false
         pp.configure(image: addFolderImage, text: "", radius: plus.height / 2)
+        pp.setHovered(hoveredKind == .plus)
         applyPop(pp, fullRect: plus, delay: 0.1)
 
         // 4) Колонка папок справа — Liquid Glass-пиллы (капсулы).
@@ -1072,6 +1072,7 @@ final class NotchContentView: NSView {
             gp.isHidden = false
             gp.configure(image: movedFolder == nm ? approveFolderGreen : folderImage,
                          text: nm, radius: chip.height / 2)
+            gp.setHovered(hoveredKind == .folder(nm))
             applyPop(gp, fullRect: chip, delay: 0.12 + CGFloat(i) * 0.04)
             y += 32 + 8
         }

@@ -31,13 +31,9 @@ mkdir -p "$DEST/Contents/MacOS"
 mkdir -p "$DEST/Contents/Resources"
 
 cp "$PROJECT_DIR/.build/release/$APP_NAME" "$DEST/Contents/MacOS/$APP_NAME"
-cp "$PROJECT_DIR/Resources/Info.plist" "$DEST/Contents/Info.plist"
-cp "$PROJECT_DIR/Resources/Check.svg" "$DEST/Contents/Resources/Check.svg"
-cp "$PROJECT_DIR/Resources/MenuIcon.svg" "$DEST/Contents/Resources/MenuIcon.svg"
-cp "$PROJECT_DIR/Resources/AddFolder.svg" "$DEST/Contents/Resources/AddFolder.svg"
-cp "$PROJECT_DIR/Resources/Folder.svg" "$DEST/Contents/Resources/Folder.svg"
-cp "$PROJECT_DIR/Resources/ApproveFolder.svg" "$DEST/Contents/Resources/ApproveFolder.svg"
-cp "$PROJECT_DIR/Resources/Loader.svg" "$DEST/Contents/Resources/Loader.svg"
+cp "$PROJECT_DIR/Sources/SnagMe/Resources/Info.plist" "$DEST/Contents/Info.plist"
+# SVG-иконки лежат в SwiftPM resource-бандле; кладём его рядом с бинарём (Bundle.module).
+cp -R "$PROJECT_DIR/.build/release/${APP_NAME}_${APP_NAME}.bundle" "$DEST/Contents/MacOS/"
 cp "$PROJECT_DIR/AppIcon.icns" "$DEST/Contents/Resources/AppIcon.icns"
 
 # Подпись: стабильная самоподписанная "SnagMe Dev" (если есть) → разрешения держатся

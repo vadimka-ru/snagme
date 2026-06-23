@@ -1,32 +1,24 @@
 import AppKit
 
-// Пилл из macOS 26 Liquid Glass (NSGlassEffectView через runtime) с иконкой + текстом.
+// Пилл-капсула с иконкой + текстом. Тёмная непрозрачная подложка поверх стеклянного слоя —
+// единый вид на любом фоне (glass как contentView даёт vibrancy и просвечивает фон, поэтому
+// заливка/контент кладутся прямо на self, НАД стеклом).
 // Прозрачен для кликов (hitTest → nil) — хит-тест/ховер ведёт NotchContentView по rect'ам.
 @MainActor
 final class GlassPill: NSView {
     let icon = NSImageView()
     let label = NSTextField(labelWithString: "")
-    private let content = NSView()
-    private var glass: NSView!
+    private let base = NSView()      // постоянная тёмная подложка
+    private let overlay = NSView()   // ховер-подсветка
+    private var glass: NSView!       // стеклянный слой (сзади, для frosted-кромки)
     private var isLiquid = false
+    private var radius: CGFloat = 0
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
 
-        icon.imageScaling = .scaleProportionallyUpOrDown
-        label.font = .systemFont(ofSize: 12, weight: .medium)
-        label.textColor = .white
-        label.isBezeled = false
-        label.drawsBackground = false
-        label.isEditable = false
-        label.isSelectable = false
-        content.addSubview(icon)
-        content.addSubview(label)
-
         if let cls = NSClassFromString("NSGlassEffectView") as? NSView.Type {
-            let g = cls.init(frame: .zero)
-            g.setValue(content, forKey: "contentView")
-            glass = g
+            glass = cls.init(frame: .zero)
             isLiquid = true
         } else {
             let v = NSVisualEffectView()
@@ -35,20 +27,46 @@ final class GlassPill: NSView {
             v.state = .active
             v.wantsLayer = true
             v.layer?.masksToBounds = true
-            v.addSubview(content)
             glass = v
         }
+
+        base.wantsLayer = true
+        base.layer?.backgroundColor = NSColor(white: 0.14, alpha: 0.6).cgColor
+        overlay.wantsLayer = true
+        overlay.layer?.backgroundColor = NSColor.clear.cgColor
+
+        icon.imageScaling = .scaleProportionallyUpOrDown
+        label.font = .systemFont(ofSize: 12, weight: .medium)
+        label.textColor = .white
+        label.isBezeled = false
+        label.drawsBackground = false
+        label.isEditable = false
+        label.isSelectable = false
+
+        // Порядок снизу вверх: стекло → тёмная заливка → ховер → иконка/текст.
         addSubview(glass)
+        addSubview(base)
+        addSubview(overlay)
+        addSubview(icon)
+        addSubview(label)
     }
     required init?(coder: NSCoder) { fatalError() }
 
     override var isFlipped: Bool { true }
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
+    private var hovered = false
+    func setHovered(_ on: Bool) {
+        guard on != hovered else { return }
+        hovered = on
+        overlay.layer?.backgroundColor = (on ? NSColor(white: 1, alpha: 0.10) : .clear).cgColor
+    }
+
     func configure(image: NSImage?, text: String, radius: CGFloat) {
         icon.image = image
         label.stringValue = text
         label.isHidden = text.isEmpty
+        self.radius = radius
         if isLiquid {
             glass.setValue(radius, forKey: "cornerRadius")
         } else {
@@ -61,7 +79,12 @@ final class GlassPill: NSView {
     override func layout() {
         super.layout()
         glass.frame = bounds
-        content.frame = bounds
+        for v in [base, overlay] {
+            v.frame = bounds
+            v.layer?.cornerRadius = radius
+            v.layer?.cornerCurve = .continuous
+            v.layer?.masksToBounds = true
+        }
         let h = bounds.height
         if label.isHidden {
             // только иконка — по центру
