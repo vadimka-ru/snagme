@@ -32,15 +32,69 @@ final class NotchContentView: NSView {
     private var isModalActive = false           // открыт системный диалог — не закрывать панель
     private var savedPollTimer: Timer?          // надёжное отслеживание курсора в saved
     private var savedOutsideSince: CFTimeInterval?
+    private var savedHoldUntil: CFTimeInterval = 0  // держать открытой до (для хоткей-захвата)
+
+    func holdOpen(_ seconds: CFTimeInterval) {
+        savedHoldUntil = CACurrentMediaTime() + seconds
+    }
+
+    func savedPreview() -> NSImage? { currentPreviews.first }
+    func restartEntrance() { startSavedEntrance() }
 
     // Анимация «разлёта» элементов saved.
     private var savedEntranceStart: CFTimeInterval = 0
     private var savedEntranceTimer: Timer?
     private let savedEntranceDur: CGFloat = 0.34
+    private let entranceSpread: CGFloat = 0.3   // разброс стаггера (для реверса при закрытии)
+
+    // Зеркальное закрытие (обратный pop-разлёт).
+    private var isClosing = false
+    private var closeStart: CFTimeInterval = 0
+    private let closeDur: CGFloat = 0.24
+    private var closeTimer: Timer?
+    private var closeCompletion: (() -> Void)?
 
     // Вращение лоадер-иконки в пилле пути.
     private var loaderAngle: CGFloat = 0
     private var loaderTimer: Timer?
+
+    // Ховер кликабельных элементов + курсор-pointer.
+    enum HoverKind: Equatable { case none, path, plus, folder(String) }
+    private var hoveredKind: HoverKind = .none
+    private var hoverTimer: Timer?
+
+    private func pillBg(_ hovered: Bool) -> NSColor {
+        hovered ? NSColor(white: 0.22, alpha: 0.92) : pillDark
+    }
+
+    func startHoverTracking() {
+        hoverTimer?.invalidate()
+        let t = Timer(timeInterval: 0.04, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.tickHover() }
+        }
+        RunLoop.main.add(t, forMode: .common)
+        hoverTimer = t
+    }
+
+    func stopHoverTracking() {
+        hoverTimer?.invalidate()
+        hoverTimer = nil
+        if hoveredKind != .none { hoveredKind = .none; needsDisplay = true }
+        NSCursor.arrow.set()
+    }
+
+    private func tickHover() {
+        guard let win = window else { return }
+        let m = NSEvent.mouseLocation
+        let p = convert(NSPoint(x: m.x - win.frame.minX, y: m.y - win.frame.minY), from: nil)
+        var kind: HoverKind = .none
+        if let r = chooseButtonRect, r.contains(p) { kind = .path }
+        else if let r = plusChipRect, r.contains(p) { kind = .plus }
+        else { for c in folderChipRects where c.rect.contains(p) { kind = .folder(c.name); break } }
+
+        if kind != hoveredKind { hoveredKind = kind; needsDisplay = true }
+        (kind == .none ? NSCursor.arrow : NSCursor.pointingHand).set()
+    }
 
     // Появление панели «из челки» (scale из точки челки + fade).
     private var revealProgress: CGFloat = 0
@@ -53,9 +107,11 @@ final class NotchContentView: NSView {
 
     // Открытие: мгновенно показываем (reveal=1) и играем pop-разлёт элементов.
     func openPanel() {
-        revealTimer?.invalidate()
-        revealProgress = 1
-        startSavedEntrance()
+        isClosing = false
+        closeTimer?.invalidate(); closeTimer = nil
+        setRevealed(true)        // плавный выезд полосы-челки (revealProgress 0→1)
+        startSavedEntrance()     // pop-разлёт контента ниже
+        startHoverTracking()
     }
 
     func setRevealed(_ shown: Bool, completion: (() -> Void)? = nil) {
@@ -120,6 +176,8 @@ final class NotchContentView: NSView {
         if movedFolder != nil { return }
         // Открыт системный диалог — держим открытой.
         if isModalActive { savedOutsideSince = nil; return }
+        // Hold-период после хоткей-захвата — держим открытой.
+        if CACurrentMediaTime() < savedHoldUntil { savedOutsideSince = nil; return }
 
         let mouse = NSEvent.mouseLocation
         let inside = window?.frame.contains(mouse) ?? false
@@ -129,7 +187,7 @@ final class NotchContentView: NSView {
             if savedOutsideSince == nil {
                 savedOutsideSince = CACurrentMediaTime()
             } else if CACurrentMediaTime() - savedOutsideSince! >= 1.2 {
-                state = .idle
+                requestClose()
             }
         }
     }
@@ -142,15 +200,16 @@ final class NotchContentView: NSView {
         if case .saved = state {
             let previewW: CGFloat = 240
             let previewH = previewW * previewAspect
-            let panelContentH = 8 + 24 + 8 + previewH + 8
+            let panelContentH = 8 + previewH + 8
             let n = folders.count
-            let folderColH: CGFloat = n > 0 ? 40 + CGFloat(n) * 32 + CGFloat(n - 1) * 8 : 0
+            let folderColH: CGFloat = n > 0 ? 8 + CGFloat(n) * 32 + CGFloat(n - 1) * 8 : 0
             let maxFolderW = folders.map { folderPillWidth($0.lastPathComponent) }.max() ?? 0
-            let halfW = max(previewW / 2 + sideGap + 32, previewW / 2 + sideGap + maxFolderW)
+            // Ширина: полоса-челка 360 ИЛИ превью+＋+колонка папок.
+            let halfW = max(180, previewW / 2 + sideGap + 32, previewW / 2 + sideGap + maxFolderW)
             return NSSize(width: 2 * halfW, height: metrics.notchHeight + max(panelContentH, folderColH))
         }
-        // idle / targeted / error — дроп-плашка 240 (+поля под тень): пилл(24)+gap8+плашка(80)+pad16.
-        return NSSize(width: 240 + 32, height: metrics.notchHeight + 128)
+        // idle / targeted / error — полоса 360 + дроп-плашка 240(80): gap8+плашка80+pad8.
+        return NSSize(width: 360 + 32, height: metrics.notchHeight + 96)
     }
 
     // Зона кнопки «Выбрать папку» (idle без папки) для клика.
@@ -296,6 +355,10 @@ final class NotchContentView: NSView {
         return NSImage(contentsOf: url)
     }()
     private lazy var approveFolderGreen: NSImage? = approveFolderImage?.tinting(with: savedGreen)
+    private lazy var loaderImage: NSImage? = {
+        guard let url = Bundle.main.url(forResource: "Loader", withExtension: "svg") else { return nil }
+        return NSImage(contentsOf: url)
+    }()
 
     // MARK: - Палитра из макета
     private let panelTop = NSColor(white: 0.0, alpha: 0.86)
@@ -411,13 +474,43 @@ final class NotchContentView: NSView {
     }
 
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
-        let pb = sender.draggingPasteboard
+        handlePasteboard(sender.draggingPasteboard)
+    }
 
-        // Мультидроп: все файлы за раз.
-        if let urls = pb.readObjects(forClasses: [NSURL.self],
-                                     options: [.urlReadingFileURLsOnly: true]) as? [URL],
-           !urls.isEmpty {
-            handleSaved(sources: urls)
+    private func saveImageObject(_ img: NSImage) {
+        switch SaveManager.shared.save(image: img) {
+        case .saved(let url, let folder):
+            currentPreviews = [img]
+            prepareChips(savedURLs: [url])
+            showSaved(SavedInfo(count: 1, name: url.deletingPathExtension().lastPathComponent,
+                                ext: url.pathExtension.lowercased(), size: fileSizeString(url), folder: folder))
+        case .noFolder: showError("Выбери папку в меню SnagMe")
+        case .failed(let m): showError(m)
+        }
+    }
+
+    // Общий приём: дроп и хоткей (drag-pasteboard).
+    // fromHotkey=true: файлы-промисы не материализованы в драге — берём только существующие/картинку.
+    @discardableResult
+    func handlePasteboard(_ pb: NSPasteboard, fromHotkey: Bool = false) -> Bool {
+        let urls = (pb.readObjects(forClasses: [NSURL.self],
+                                   options: [.urlReadingFileURLsOnly: true]) as? [URL]) ?? []
+        let existing = urls.filter { FileManager.default.fileExists(atPath: $0.path) }
+
+        if fromHotkey {
+            // Скриншот-превью отдаёт промис-URL (копия падает) → берём картинку из pasteboard первой.
+            if let img = (pb.readObjects(forClasses: [NSImage.self], options: nil) as? [NSImage])?.first {
+                saveImageObject(img)
+                return true
+            }
+            if !existing.isEmpty { handleSaved(sources: existing); return true }
+            showError("Не получилось захватить")
+            return false
+        }
+
+        // Обычный дроп: реальные файлы → promise → картинка.
+        if !existing.isEmpty {
+            handleSaved(sources: existing)
             return true
         }
 
@@ -438,15 +531,7 @@ final class NotchContentView: NSView {
 
         if let images = pb.readObjects(forClasses: [NSImage.self], options: nil) as? [NSImage],
            let img = images.first {
-            switch SaveManager.shared.save(image: img) {
-            case .saved(let url, let folder):
-                currentPreviews = [img]
-                prepareChips(savedURLs: [url])
-                showSaved(SavedInfo(count: 1, name: url.deletingPathExtension().lastPathComponent,
-                                    ext: url.pathExtension.lowercased(), size: fileSizeString(url), folder: folder))
-            case .noFolder: showError("Выбери папку в меню SnagMe")
-            case .failed(let m): showError(m)
-            }
+            saveImageObject(img)
             return true
         }
 
@@ -560,11 +645,20 @@ final class NotchContentView: NSView {
         savedEntranceTimer = t
     }
 
-    // Трансформ появления элемента: scale-pop + fade со стаггером по delay.
+    // Трансформ появления/исчезновения элемента: scale-pop + fade со стаггером.
     private func entrance(center: NSPoint, delay: CGFloat, _ body: () -> Void) {
         guard let ctx = NSGraphicsContext.current?.cgContext else { body(); return }
-        let elapsed = CGFloat(CACurrentMediaTime() - savedEntranceStart)
-        let t = max(0, min(1, (elapsed - delay) / savedEntranceDur))
+        let t: CGFloat
+        if isClosing {
+            // Реверс: элементы с большим delay (папки) закрываются первыми.
+            let elapsed = CGFloat(CACurrentMediaTime() - closeStart)
+            let closeDelay = max(0, entranceSpread - delay)
+            let tc = max(0, min(1, (elapsed - closeDelay) / closeDur))
+            t = 1 - tc
+        } else {
+            let elapsed = CGFloat(CACurrentMediaTime() - savedEntranceStart)
+            t = max(0, min(1, (elapsed - delay) / savedEntranceDur))
+        }
         let c1: CGFloat = 1.2
         let e = 1 + (c1 + 1) * pow(t - 1, 3) + c1 * pow(t - 1, 2) // easeOutBack
         let scale = 0.8 + 0.2 * e
@@ -577,14 +671,53 @@ final class NotchContentView: NSView {
         ctx.restoreGState()
     }
 
+    // Зеркальное закрытие: обратный pop, затем completion (сворачивание окна).
+    func startClose(completion: @escaping () -> Void) {
+        closeCompletion = completion
+        isClosing = true
+        closeStart = CACurrentMediaTime()
+        setRevealed(false) // полоса-челка тоже уезжает
+        closeTimer?.invalidate()
+        let total = Double(closeDur + entranceSpread) + 0.04
+        let t = Timer(timeInterval: 1.0 / 60.0, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.needsDisplay = true
+                if CACurrentMediaTime() - self.closeStart >= total {
+                    self.closeTimer?.invalidate(); self.closeTimer = nil
+                    self.isClosing = false
+                    let c = self.closeCompletion; self.closeCompletion = nil
+                    c?()
+                }
+            }
+        }
+        RunLoop.main.add(t, forMode: .common)
+        closeTimer = t
+    }
+
     private func showError(_ msg: String) {
         state = .error(msg)
         scheduleRevert()
     }
 
+    // Закрытие сворачивает окно из текущего состояния (без вспышки idle).
+    var onRequestClose: (() -> Void)?
+
+    private func requestClose() {
+        revertWork?.cancel()
+        stopSavedPoll()
+        onRequestClose?()
+    }
+
+    // Сброс в idle — вызывается окном ПОСЛЕ полного сворачивания (не видно).
+    func resetToIdle() {
+        if case .idle = state { return }
+        state = .idle
+    }
+
     private func scheduleRevert(after: TimeInterval = 2.0) {
         revertWork?.cancel()
-        let work = DispatchWorkItem { [weak self] in self?.state = .idle }
+        let work = DispatchWorkItem { [weak self] in self?.requestClose() }
         revertWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + after, execute: work)
     }
@@ -603,72 +736,45 @@ final class NotchContentView: NSView {
 
     override func draw(_ dirtyRect: NSRect) {
         let b = bounds
-        let filletR: CGFloat = 17
         let notchH = metrics.notchHeight
+        let cx = b.midX
+        let p = revealProgress
 
-        // Новый saved — плавающие элементы, без монолитного блоба.
-        if case .saved(let info) = state {
-            NSColor.black.setFill()
-            let nw = min(metrics.notchWidth, b.width)
-            bottomRoundedPath(in: NSRect(x: b.midX - nw / 2, y: 0, width: nw, height: notchH), radius: 16).fill()
-            drawSavedFloating(in: b, notchH: notchH, info: info)
-            return
+        // Челка-полоса: ширина анимируется notchWidth → 360 (выезжают крылья).
+        let notchW = min(metrics.notchWidth, b.width)
+        let barW = notchW + (360 - notchW) * p
+        let bar = NSRect(x: cx - barW / 2, y: 0, width: barW, height: notchH)
+        NSColor.black.setFill()
+        bottomRoundedPath(in: bar, radius: 16).fill()
+
+        guard let ctx = NSGraphicsContext.current?.cgContext else { return }
+
+        // Контент крыльев (имя папки/Saved слева, лоадер/check справа), alpha p.
+        if p > 0.01 {
+            ctx.saveGState(); ctx.setAlpha(Double(p))
+            drawBarWings(bar: bar)
+            ctx.restoreGState()
+        } else {
+            chooseButtonRect = nil
         }
 
-        // Чёрный таб челки.
-        let notchW = min(metrics.notchWidth, b.width)
-        NSColor.black.setFill()
-        bottomRoundedPath(in: NSRect(x: b.midX - notchW / 2, y: 0, width: notchW, height: notchH), radius: 16).fill()
-
-        // idle / targeted / error → плавающая drop-панель, вырастает из челки.
-        guard b.height > notchH + 1, revealProgress > 0.001,
-              let ctx = NSGraphicsContext.current?.cgContext else { return }
-        ctx.saveGState()
-        ctx.setAlpha(Double(revealProgress))
-        let s = 0.3 + 0.7 * revealProgress
-        ctx.translateBy(x: b.midX, y: notchH)
-        ctx.scaleBy(x: s, y: s)
-        ctx.translateBy(x: -b.midX, y: -notchH)
-        drawDropFloating(in: b, notchH: notchH)
-        ctx.restoreGState()
+        // Контент ниже челки — pop-разлёт/схлоп через entrance() (свой alpha+scale).
+        guard b.height > notchH + 1 else { return }
+        if case .saved(let info) = state {
+            drawSavedFloating(in: b, notchH: notchH, info: info)
+        } else {
+            drawDropFloating(in: b, notchH: notchH)
+        }
     }
 
-    // Плавающая drop-панель: пилл пути + тёмная плашка с пунктиром.
+    // Плавающая drop-плашка (путь/Saved теперь в полосе-челке).
     private func drawDropFloating(in b: NSRect, notchH: CGFloat) {
         let cx = b.midX
         let dropW: CGFloat = 240
-        let pillW: CGFloat = 169
         let hasFolder = SaveManager.shared.destination != nil
 
-        // 1) Пилл пути (169, центр) — всегда кликабелен: системный выбор корневой папки.
-        let pathPill = NSRect(x: cx - pillW / 2, y: notchH + 8, width: pillW, height: 24)
-        chooseButtonRect = pathPill
-        entrance(center: NSPoint(x: pathPill.midX, y: pathPill.midY), delay: 0) {
-            drawFloatingPill(pathPill, color: pillDark)
-            let nameAttrs: [NSAttributedString.Key: Any] = [
-                .font: NSFont.systemFont(ofSize: 12, weight: .medium),
-                .foregroundColor: hasFolder ? NSColor(white: 1, alpha: 0.85) : savedGreen
-            ]
-            let pathLabel = hasFolder ? (SaveManager.shared.destination?.lastPathComponent ?? "") : "Выбрать папку"
-            pathLabel.draw(at: NSPoint(x: pathPill.minX + 8, y: pathPill.midY - 7), withAttributes: nameAttrs)
-            if let loader = NSImage(systemSymbolName: "circle.dotted", accessibilityDescription: nil),
-               let ctx = NSGraphicsContext.current?.cgContext {
-                let cfg = NSImage.SymbolConfiguration(pointSize: 12, weight: .regular)
-                let tinted = loader.withSymbolConfiguration(cfg)?.tinting(with: NSColor(white: 1, alpha: 0.5))
-                let lr = NSRect(x: pathPill.maxX - 4 - 16, y: pathPill.midY - 8, width: 16, height: 16)
-                let lc = NSPoint(x: lr.midX, y: lr.midY)
-                ctx.saveGState()
-                ctx.translateBy(x: lc.x, y: lc.y)
-                ctx.rotate(by: self.loaderAngle * .pi / 180)
-                ctx.translateBy(x: -lc.x, y: -lc.y)
-                tinted?.draw(in: lr, from: .zero, operation: .sourceOver,
-                             fraction: 1, respectFlipped: true, hints: nil)
-                ctx.restoreGState()
-            }
-        }
-
-        // 2) Тёмная плашка с пунктиром (240, центр).
-        let blob = NSRect(x: cx - dropW / 2, y: pathPill.maxY + 8, width: dropW, height: 80)
+        // Тёмная плашка с пунктиром (240, центр), сразу под челкой.
+        let blob = NSRect(x: cx - dropW / 2, y: notchH + 8, width: dropW, height: 80)
         entrance(center: NSPoint(x: blob.midX, y: blob.midY), delay: 0.06) {
             let blobPath = NSBezierPath(roundedRect: blob, xRadius: 16, yRadius: 16)
             NSGraphicsContext.current?.saveGraphicsState()
@@ -811,27 +917,48 @@ final class NotchContentView: NSView {
         NSGraphicsContext.current?.restoreGraphicsState()
     }
 
+    private func rootPathLabel() -> String {
+        guard let dest = SaveManager.shared.destination else { return "Выбрать папку" }
+        let home = NSHomeDirectory()
+        return dest.path.hasPrefix(home) ? "~" + dest.path.dropFirst(home.count) : dest.lastPathComponent
+    }
+
+    // Контент «крыльев» челки-полосы: слева имя/Saved, справа лоадер/check.
+    private func drawBarWings(bar: NSRect) {
+        if case .saved = state {
+            chooseButtonRect = nil
+            let a: [NSAttributedString.Key: Any] = [
+                .font: NSFont.systemFont(ofSize: 12, weight: .medium), .foregroundColor: savedGreen]
+            "Saved".draw(at: NSPoint(x: bar.minX + 8, y: bar.midY - 7), withAttributes: a)
+            drawAnimatedCheck(in: NSRect(x: bar.maxX - 8 - 16, y: bar.midY - 8, width: 16, height: 16),
+                              progress: checkProgress)
+            return
+        }
+        // idle / targeted: вся полоса кликабельна → выбор корня.
+        chooseButtonRect = bar
+        let hasFolder = SaveManager.shared.destination != nil
+        let a: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 12, weight: .medium),
+            .foregroundColor: hasFolder ? NSColor(white: 1, alpha: 0.85) : savedGreen]
+        (hasFolder ? rootPathLabel() : "Выбрать папку")
+            .draw(at: NSPoint(x: bar.minX + 8, y: bar.midY - 7), withAttributes: a)
+        if let loader = loaderImage, let ctx = NSGraphicsContext.current?.cgContext {
+            let lr = NSRect(x: bar.maxX - 8 - 16, y: bar.midY - 8, width: 16, height: 16)
+            let lc = NSPoint(x: lr.midX, y: lr.midY)
+            ctx.saveGState()
+            ctx.translateBy(x: lc.x, y: lc.y); ctx.rotate(by: loaderAngle * .pi / 180); ctx.translateBy(x: -lc.x, y: -lc.y)
+            loader.draw(in: lr, from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
+            ctx.restoreGState()
+        }
+    }
+
     private func drawSavedFloating(in b: NSRect, notchH: CGFloat, info: SavedInfo) {
         let cx = b.midX
         let previewW: CGFloat = 240
         let previewH = previewW * previewAspect
 
-        // 1) Пилл «Saved» — 169 (шириной с челку), центрирован над превью.
-        let pillW: CGFloat = 169
-        let pill = NSRect(x: cx - pillW / 2, y: notchH + 8, width: pillW, height: 24)
-        let savedAttrs: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: 12, weight: .medium),
-            .foregroundColor: savedGreen
-        ]
-        entrance(center: NSPoint(x: pill.midX, y: pill.midY), delay: 0) {
-            drawFloatingPill(pill, color: NSColor(white: 0, alpha: 0.9))
-            "Saved".draw(at: NSPoint(x: pill.minX + 8, y: pill.midY - 7), withAttributes: savedAttrs)
-            drawAnimatedCheck(in: NSRect(x: pill.maxX - 4 - 16, y: pill.midY - 8, width: 16, height: 16),
-                              progress: checkProgress)
-        }
-
-        // 2) Превью 240 (landscape), оверлей 0.2.
-        let preview = NSRect(x: cx - previewW / 2, y: pill.maxY + 8, width: previewW, height: previewH)
+        // Превью 240 сразу под челкой (Saved/check теперь в полосе-челке).
+        let preview = NSRect(x: cx - previewW / 2, y: notchH + 8, width: previewW, height: previewH)
         entrance(center: NSPoint(x: preview.midX, y: preview.midY), delay: 0.05) {
             if info.count > 1, !currentPreviews.isEmpty {
                 // Мультидроп — стопка веером на тёмной подложке.
@@ -851,7 +978,7 @@ final class NotchContentView: NSView {
         let plus = NSRect(x: preview.minX - sideGap - 32, y: preview.minY, width: 32, height: 32)
         plusChipRect = plus
         entrance(center: NSPoint(x: plus.midX, y: plus.midY), delay: 0.1) {
-            drawFloatingPill(plus, color: pillDark)
+            drawFloatingPill(plus, color: self.pillBg(self.hoveredKind == .plus))
             addFolderImage?.draw(in: NSRect(x: plus.midX - 8, y: plus.midY - 8, width: 16, height: 16),
                                  from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
         }
@@ -866,7 +993,7 @@ final class NotchContentView: NSView {
             let chip = NSRect(x: colX, y: y, width: w, height: 32)
             folderChipRects.append((chip, nm))
             entrance(center: NSPoint(x: chip.midX, y: chip.midY), delay: 0.12 + CGFloat(i) * 0.04) {
-                drawFloatingPill(chip, color: pillDark)
+                drawFloatingPill(chip, color: self.pillBg(self.hoveredKind == .folder(nm)))
                 let iconRect = NSRect(x: chip.minX + 8, y: chip.midY - 8, width: 16, height: 16)
                 if movedFolder == nm {
                     drawIconPop(approveFolderGreen, in: iconRect, progress: chipCheckProgress)

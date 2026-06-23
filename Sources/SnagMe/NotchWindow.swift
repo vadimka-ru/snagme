@@ -66,6 +66,10 @@ final class NotchWindow: NSWindow {
         contentViewCustom.onDragActiveChange = { [weak self] active in
             self?.isDragActive = active
         }
+        // Закрытие из контента (savedPoll / выбор папки) → свернуть окно.
+        contentViewCustom.onRequestClose = { [weak self] in
+            self?.setExpanded(false)
+        }
         // Смена формы плашки (drop ↔ saved) — плавно переанимировать размер.
         contentViewCustom.onRequestResize = { [weak self] in
             guard let self, self.isExpandedState else { return }
@@ -80,6 +84,40 @@ final class NotchWindow: NSWindow {
         setFrame(collapsedFrame, display: true)
         orderFrontRegardless()
         startHoverTracking()
+    }
+
+    // Захват из текущего драга по хоткею (⌥Space): читаем drag-pasteboard.
+    func captureFromDrag() {
+        let pb = NSPasteboard(name: .drag)
+        let urls = (pb.readObjects(forClasses: [NSURL.self],
+                                   options: [.urlReadingFileURLsOnly: true]) as? [URL]) ?? []
+        let imgs = pb.readObjects(forClasses: [NSImage.self], options: nil) as? [NSImage]
+        NSLog("SnagMe ⌥Space: drag pb → urls=\(urls.map { $0.lastPathComponent }), images=\(imgs?.count ?? 0)")
+
+        guard contentViewCustom.handlePasteboard(pb, fromHotkey: true) else { return }
+        contentViewCustom.holdOpen(6.0) // не сворачивать во время полёта + после
+
+        // Полёт миниатюры от курсора в челку → затем раскрытие панели.
+        let start = NSEvent.mouseLocation
+        let notchPt = NSPoint(x: metrics.screenFrame.midX,
+                              y: metrics.screenFrame.maxY - metrics.notchHeight / 2)
+        if let img = contentViewCustom.savedPreview() {
+            FlyAnimator.shared.fly(image: img, from: start, to: notchPt) { [weak self] in
+                self?.presentAfterFly()
+            }
+        } else {
+            presentAfterFly()
+        }
+    }
+
+    private func presentAfterFly() {
+        isExpandedState = true
+        ignoresMouseEvents = false
+        setFrame(expandedFrame, display: true)
+        contentViewCustom.restartEntrance()
+        contentViewCustom.setRevealed(true)
+        contentViewCustom.startHoverTracking()
+        contentViewCustom.holdOpen(4.0)
     }
 
     // MARK: - Hover через позицию курсора
@@ -118,10 +156,12 @@ final class NotchWindow: NSWindow {
             contentViewCustom.openPanel()
         } else {
             // Контент уезжает в челку, затем сворачиваем окно.
-            contentViewCustom.setRevealed(false) { [weak self] in
+            contentViewCustom.stopHoverTracking()
+            contentViewCustom.startClose { [weak self] in
                 guard let self else { return }
                 self.setFrame(self.collapsedFrame, display: true)
                 self.ignoresMouseEvents = true
+                self.contentViewCustom.resetToIdle() // сброс уже после сворачивания — без вспышки
             }
         }
     }

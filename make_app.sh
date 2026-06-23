@@ -37,6 +37,7 @@ cp "$PROJECT_DIR/Resources/MenuIcon.svg" "$DEST/Contents/Resources/MenuIcon.svg"
 cp "$PROJECT_DIR/Resources/AddFolder.svg" "$DEST/Contents/Resources/AddFolder.svg"
 cp "$PROJECT_DIR/Resources/Folder.svg" "$DEST/Contents/Resources/Folder.svg"
 cp "$PROJECT_DIR/Resources/ApproveFolder.svg" "$DEST/Contents/Resources/ApproveFolder.svg"
+cp "$PROJECT_DIR/Resources/Loader.svg" "$DEST/Contents/Resources/Loader.svg"
 cp "$PROJECT_DIR/AppIcon.icns" "$DEST/Contents/Resources/AppIcon.icns"
 
 # Локальная подпись (ad-hoc) — чтобы macOS не ругался при запуске.

@@ -19,6 +19,8 @@ struct SnagMeApp {
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem?
     private var notchWindow: NotchWindow?
+    private var hotKey: HotKey?
+    private var doubleShift: DoubleShift?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Без иконки в доке — фоновый agent.
@@ -28,6 +30,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let window = NotchWindow(metrics: .current())
         window.show()
         self.notchWindow = window
+
+        // Глобальный хоткей ⌥Space — захват из текущего драга.
+        let hk = HotKey()
+        hk.onPress = { [weak self] in self?.notchWindow?.captureFromDrag() }
+        hk.register()
+        self.hotKey = hk
+
+        // Двойной Shift (удобнее в драге). Требует Accessibility для глобального монитора.
+        let ds = DoubleShift()
+        ds.onTrigger = { [weak self] in self?.notchWindow?.captureFromDrag() }
+        ds.start()
+        self.doubleShift = ds
 
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if let button = item.button {
