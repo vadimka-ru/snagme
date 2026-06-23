@@ -485,7 +485,7 @@ final class NotchContentView: NSView {
             prepareChips(savedURLs: [url])
             showSaved(SavedInfo(count: 1, name: url.deletingPathExtension().lastPathComponent,
                                 ext: url.pathExtension.lowercased(), size: fileSizeString(url), folder: folder))
-        case .noFolder: showError("Выбери папку в меню SnagMe")
+        case .noFolder: showError("Pick a folder first")
         case .failed(let m): showError(m)
         }
     }
@@ -505,8 +505,7 @@ final class NotchContentView: NSView {
                 return true
             }
             if !existing.isEmpty { handleSaved(sources: existing); return true }
-            showError("Не получилось захватить")
-            return false
+            return false // нечего захватывать — тихий no-op (окно ловит скриншот с диска отдельно)
         }
 
         // Обычный дроп: реальные файлы → promise → картинка.
@@ -536,7 +535,7 @@ final class NotchContentView: NSView {
             return true
         }
 
-        showError("не распознал тип")
+        showError("Unsupported type")
         return false
     }
 
@@ -551,12 +550,12 @@ final class NotchContentView: NSView {
             switch SaveManager.shared.save(fileAt: src) {
             case .saved(let url, let f):
                 saved.append(url); folder = f; totalBytes += fileBytes(url)
-            case .noFolder: failMsg = "Выбери папку в меню SnagMe"
+            case .noFolder: failMsg = "Pick a folder first"
             case .failed(let m): failMsg = m
             }
         }
 
-        guard !saved.isEmpty else { showError(failMsg ?? "ошибка"); return }
+        guard !saved.isEmpty else { showError(failMsg ?? "Error"); return }
 
         prepareChips(savedURLs: saved)
 
@@ -806,11 +805,13 @@ final class NotchContentView: NSView {
             dashed.setLineDash([6, 5], count: 2, phase: animated ? self.dashPhase : 0)
             (animated ? self.mint : NSColor(white: 1, alpha: 0.3)).setStroke()
             dashed.stroke()
+            let isError: Bool = { if case .error = self.state { return true } else { return false } }()
             let attrs: [NSAttributedString.Key: Any] = [
-                .font: NSFont.systemFont(ofSize: 16, weight: .regular), .foregroundColor: color
+                .font: NSFont.systemFont(ofSize: isError ? 13 : 16, weight: .regular), .foregroundColor: color
             ]
-            let sz = label.size(withAttributes: attrs)
-            label.draw(at: NSPoint(x: inner.midX - sz.width / 2, y: inner.midY - sz.height / 2), withAttributes: attrs)
+            let display = self.truncate(label, attrs: attrs, maxWidth: inner.width - 16)
+            let sz = display.size(withAttributes: attrs)
+            display.draw(at: NSPoint(x: inner.midX - sz.width / 2, y: inner.midY - sz.height / 2), withAttributes: attrs)
         }
     }
 

@@ -105,8 +105,17 @@ final class SaveManager {
             try FileManager.default.copyItem(at: source, to: target)
             return .saved(url: target, folder: dir.lastPathComponent)
         } catch {
-            return .failed(error.localizedDescription)
+            return .failed(Self.shortMessage(error))
         }
+    }
+
+    private static func shortMessage(_ error: Error) -> String {
+        let ns = error as NSError
+        if ns.domain == NSCocoaErrorDomain,
+           ns.code == NSFileReadNoPermissionError || ns.code == NSFileWriteNoPermissionError {
+            return "No file access"
+        }
+        return "Couldn't save"
     }
 
     // Сохранение сырого изображения как PNG.
@@ -115,14 +124,14 @@ final class SaveManager {
         guard let tiff = image.tiffRepresentation,
               let rep = NSBitmapImageRep(data: tiff),
               let png = rep.representation(using: .png, properties: [:]) else {
-            return .failed("не смог сконвертировать")
+            return .failed("Couldn't convert")
         }
         let target = uniqueURL(for: "\(suggestedName).png", in: dir)
         do {
             try png.write(to: target)
             return .saved(url: target, folder: dir.lastPathComponent)
         } catch {
-            return .failed(error.localizedDescription)
+            return .failed(Self.shortMessage(error))
         }
     }
 

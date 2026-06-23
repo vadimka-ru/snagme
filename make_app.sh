@@ -40,7 +40,15 @@ cp "$PROJECT_DIR/Resources/ApproveFolder.svg" "$DEST/Contents/Resources/ApproveF
 cp "$PROJECT_DIR/Resources/Loader.svg" "$DEST/Contents/Resources/Loader.svg"
 cp "$PROJECT_DIR/AppIcon.icns" "$DEST/Contents/Resources/AppIcon.icns"
 
-# Локальная подпись (ad-hoc) — чтобы macOS не ругался при запуске.
-codesign --force --deep --sign - "$DEST" 2>/dev/null || true
+# Подпись: стабильная самоподписанная "SnagMe Dev" (если есть) → разрешения держатся
+# между пересборками. Иначе ad-hoc (разрешения слетают на каждом билде).
+IDENTITY="SnagMe Dev"
+if security find-identity -v -p codesigning 2>/dev/null | grep -q "$IDENTITY"; then
+    echo "→ Подпись: $IDENTITY (стабильная)"
+    codesign --force --deep --sign "$IDENTITY" "$DEST" 2>/dev/null || true
+else
+    echo "→ Подпись: ad-hoc (создай '$IDENTITY' в Keychain, чтобы разрешения не слетали)"
+    codesign --force --deep --sign - "$DEST" 2>/dev/null || true
+fi
 
 echo "✓ Готово: $DEST"
