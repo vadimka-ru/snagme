@@ -175,13 +175,33 @@ final class NotchWindow: NSWindow {
                 setExpanded(false)
             }
         } else {
-            // Кнопка зажата = тащим файл → широкая зона. Просто курсор → узкая (у самой челки),
-            // чтобы не мешать кликать по менюбару рядом.
-            let dragging = NSEvent.pressedMouseButtons != 0
-            let zone = dragging ? dragZoneFrame : hoverZoneFrame
-            if zone.contains(mouse) { setExpanded(true) }
+            // Реальный файл-драг отличаем от клика: драг меняет changeCount drag-pasteboard.
+            let dragCC = NSPasteboard(name: .drag).changeCount
+            let pressed = NSEvent.pressedMouseButtons != 0
+            if !pressed { dragBaselineCC = dragCC }
+            let realDrag = pressed && dragCC != dragBaselineCC
+
+            if realDrag {
+                // Тащим файл → широкая зона, открываем сразу.
+                hoverSince = nil
+                if dragZoneFrame.contains(mouse) { setExpanded(true) }
+            } else {
+                // Просто курсор/клик → узкая зона (ровно челка) + задержка (dwell).
+                if hoverZoneFrame.contains(mouse) {
+                    if hoverSince == nil {
+                        hoverSince = CACurrentMediaTime()
+                    } else if CACurrentMediaTime() - hoverSince! >= 0.35 {
+                        setExpanded(true)
+                    }
+                } else {
+                    hoverSince = nil
+                }
+            }
         }
     }
+
+    private var hoverSince: CFTimeInterval?
+    private var dragBaselineCC = 0
 
     private func setExpanded(_ expanded: Bool) {
         guard expanded != isExpandedState else { return }
@@ -257,8 +277,9 @@ final class NotchWindow: NSWindow {
         return frame(for: NSSize(width: w, height: metrics.notchHeight + 36))
     }
 
-    // Просто курсор: узкая зона у самой челки — не мешает кликать менюбар рядом.
+    // Просто курсор: зона = РОВНО вырез челки (без захода вниз), чтобы клик под
+    // челкой (табы Figma/браузера) не открывал панель.
     private var hoverZoneFrame: NSRect {
-        frame(for: NSSize(width: metrics.notchWidth + 8, height: metrics.notchHeight + 4))
+        frame(for: NSSize(width: metrics.notchWidth, height: metrics.notchHeight))
     }
 }
