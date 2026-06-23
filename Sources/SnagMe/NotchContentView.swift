@@ -645,23 +645,28 @@ final class NotchContentView: NSView {
         savedEntranceTimer = t
     }
 
-    // Трансформ появления/исчезновения элемента: scale-pop + fade со стаггером.
-    private func entrance(center: NSPoint, delay: CGFloat, _ body: () -> Void) {
-        guard let ctx = NSGraphicsContext.current?.cgContext else { body(); return }
-        let t: CGFloat
+    // Прогресс появления/исчезновения элемента (0→1 / 1→0) со стаггером.
+    private func entranceT(delay: CGFloat) -> CGFloat {
         if isClosing {
             // Реверс: элементы с большим delay (папки) закрываются первыми.
             let elapsed = CGFloat(CACurrentMediaTime() - closeStart)
             let closeDelay = max(0, entranceSpread - delay)
-            let tc = max(0, min(1, (elapsed - closeDelay) / closeDur))
-            t = 1 - tc
-        } else {
-            let elapsed = CGFloat(CACurrentMediaTime() - savedEntranceStart)
-            t = max(0, min(1, (elapsed - delay) / savedEntranceDur))
+            return 1 - max(0, min(1, (elapsed - closeDelay) / closeDur))
         }
+        let elapsed = CGFloat(CACurrentMediaTime() - savedEntranceStart)
+        return max(0, min(1, (elapsed - delay) / savedEntranceDur))
+    }
+    private func popScale(_ t: CGFloat) -> CGFloat {
         let c1: CGFloat = 1.2
         let e = 1 + (c1 + 1) * pow(t - 1, 3) + c1 * pow(t - 1, 2) // easeOutBack
-        let scale = 0.8 + 0.2 * e
+        return 0.8 + 0.2 * e
+    }
+
+    // Pop-разлёт для рисованных элементов (в drawRect).
+    private func entrance(center: NSPoint, delay: CGFloat, _ body: () -> Void) {
+        guard let ctx = NSGraphicsContext.current?.cgContext else { body(); return }
+        let t = entranceT(delay: delay)
+        let scale = popScale(t)
         ctx.saveGState()
         ctx.setAlpha(Double(t))
         ctx.translateBy(x: center.x, y: center.y)
@@ -669,6 +674,15 @@ final class NotchContentView: NSView {
         ctx.translateBy(x: -center.x, y: -center.y)
         body()
         ctx.restoreGState()
+    }
+
+    // Pop-разлёт для glass-сабвью: масштабируем frame вокруг центра + alpha.
+    private func applyPop(_ v: NSView, fullRect: NSRect, delay: CGFloat) {
+        let t = entranceT(delay: delay)
+        let s = popScale(t)
+        let w = fullRect.width * s, h = fullRect.height * s
+        v.frame = NSRect(x: fullRect.midX - w / 2, y: fullRect.midY - h / 2, width: w, height: h)
+        v.alphaValue = Double(t)
     }
 
     // Зеркальное закрытие: обратный pop, затем completion (сворачивание окна).
@@ -759,60 +773,116 @@ final class NotchContentView: NSView {
         }
 
         // Контент ниже челки — pop-разлёт/схлоп через entrance() (свой alpha+scale).
-        guard b.height > notchH + 1 else { return }
+        guard b.height > notchH + 1 else { dropGlass.isHidden = true; hideSavedGlass(); return }
         if case .saved(let info) = state {
+            dropGlass.isHidden = true
             drawSavedFloating(in: b, notchH: notchH, info: info)
         } else {
+            hideSavedGlass()
             drawDropFloating(in: b, notchH: notchH)
         }
     }
 
     // Плавающая drop-плашка (путь/Saved теперь в полосе-челке).
+    // Стеклянная drop-плашка: macOS 26 Liquid Glass (NSGlassEffectView), иначе NSVisualEffectView.
+    private weak var dropContentHost: NSView?
+    private lazy var dropGlass: NSView = makeDropGlass()
+
+    // Glass-пиллы для ＋ и папок (saved).
+    private var plusPill: GlassPill?
+    private var folderPills: [GlassPill] = []
+
+    private func ensurePlusPill() -> GlassPill {
+        if let p = plusPill { return p }
+        let p = GlassPill(frame: .zero); p.isHidden = true; addSubview(p); plusPill = p; return p
+    }
+    private func ensureFolderPills(_ count: Int) {
+        while folderPills.count < count {
+            let p = GlassPill(frame: .zero); p.isHidden = true; addSubview(p); folderPills.append(p)
+        }
+        for (i, p) in folderPills.enumerated() where i >= count { p.isHidden = true }
+    }
+    private func hideSavedGlass() {
+        plusPill?.isHidden = true
+        folderPills.forEach { $0.isHidden = true }
+    }
+
+    private func makeDropGlass() -> NSView {
+        let host: NSView
+        // macOS 26 Liquid Glass через runtime (NSGlassEffectView нет в старом SDK).
+        if let cls = NSClassFromString("NSGlassEffectView") as? NSView.Type {
+            let g = cls.init(frame: .zero)
+            g.setValue(CGFloat(16), forKey: "cornerRadius")
+            let content = NSView()
+            content.wantsLayer = true
+            content.layer?.addSublayer(dropDash)
+            content.layer?.addSublayer(dropText)
+            g.setValue(content, forKey: "contentView")
+            dropContentHost = content
+            host = g
+        } else {
+            let g = NSVisualEffectView()
+            g.material = .fullScreenUI
+            g.blendingMode = .behindWindow
+            g.state = .active
+            g.wantsLayer = true
+            g.layer?.cornerRadius = 16
+            g.layer?.masksToBounds = true
+            g.layer?.addSublayer(dropDash)
+            g.layer?.addSublayer(dropText)
+            dropContentHost = g
+            host = g
+        }
+        host.isHidden = true
+        addSubview(host)
+        return host
+    }
+    private let dropDash: CAShapeLayer = {
+        let l = CAShapeLayer(); l.fillColor = nil; l.lineWidth = 1; l.lineDashPattern = [6, 5]; return l
+    }()
+    private let dropText: CATextLayer = {
+        let l = CATextLayer(); l.alignmentMode = .center; l.truncationMode = .end; return l
+    }()
+
     private func drawDropFloating(in b: NSRect, notchH: CGFloat) {
         let cx = b.midX
         let dropW: CGFloat = 240
         let hasFolder = SaveManager.shared.destination != nil
-
-        // Тёмная плашка с пунктиром (240, центр), сразу под челкой.
         let blob = NSRect(x: cx - dropW / 2, y: notchH + 8, width: dropW, height: 80)
-        entrance(center: NSPoint(x: blob.midX, y: blob.midY), delay: 0.06) {
-            let blobPath = NSBezierPath(roundedRect: blob, xRadius: 16, yRadius: 16)
-            NSGraphicsContext.current?.saveGraphicsState()
-            let sh = NSShadow()
-            sh.shadowColor = NSColor(white: 0, alpha: 0.12)
-            sh.shadowOffset = NSSize(width: 0, height: -8)
-            sh.shadowBlurRadius = 12
-            sh.set()
-            self.panelBottom.setFill()
-            blobPath.fill()
-            NSGraphicsContext.current?.restoreGraphicsState()
-            if let gradient = NSGradient(starting: self.panelTop, ending: self.panelBottom) {
-                gradient.draw(in: blobPath, angle: 90)
-            }
+        let scale = window?.backingScaleFactor ?? 2
 
-            let label: String
-            let color: NSColor
-            var animated = false
-            switch self.state {
-            case .targeted: label = "Drop it"; color = self.mint; animated = true
-            case .error(let m): label = m; color = .systemRed
-            default: label = hasFolder ? "Drop the pic here" : "Сначала выбери папку"
-                     color = NSColor(white: 1, alpha: 0.9)
-            }
-            let inner = blob.insetBy(dx: 4, dy: 4)
-            let dashed = NSBezierPath(roundedRect: inner, xRadius: 12, yRadius: 12)
-            dashed.lineWidth = 1
-            dashed.setLineDash([6, 5], count: 2, phase: animated ? self.dashPhase : 0)
-            (animated ? self.mint : NSColor(white: 1, alpha: 0.3)).setStroke()
-            dashed.stroke()
-            let isError: Bool = { if case .error = self.state { return true } else { return false } }()
-            let attrs: [NSAttributedString.Key: Any] = [
-                .font: NSFont.systemFont(ofSize: isError ? 13 : 16, weight: .regular), .foregroundColor: color
-            ]
-            let display = self.truncate(label, attrs: attrs, maxWidth: inner.width - 16)
-            let sz = display.size(withAttributes: attrs)
-            display.draw(at: NSPoint(x: inner.midX - sz.width / 2, y: inner.midY - sz.height / 2), withAttributes: attrs)
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        defer { CATransaction.commit() }
+
+        dropGlass.isHidden = false
+        applyPop(dropGlass, fullRect: blob, delay: 0.06) // pop-разлёт стеклянной плашки
+        let gb = dropGlass.bounds // текущий (масштабированный) размер
+        dropContentHost?.frame = CGRect(origin: .zero, size: gb.size)
+
+        let label: String
+        let color: NSColor
+        var animated = false
+        switch state {
+        case .targeted: label = "Drop it"; color = mint; animated = true
+        case .error(let m): label = m; color = .systemRed
+        default: label = hasFolder ? "Drop the pic here" : "Pick a folder first"
+                 color = NSColor(white: 1, alpha: 0.9)
         }
+
+        let inner = CGRect(x: 4, y: 4, width: gb.width - 8, height: gb.height - 8)
+        dropDash.frame = gb
+        dropDash.path = CGPath(roundedRect: inner, cornerWidth: 12, cornerHeight: 12, transform: nil)
+        dropDash.strokeColor = (animated ? mint : NSColor(white: 1, alpha: 0.3)).cgColor
+        dropDash.lineDashPhase = animated ? dashPhase : 0
+        dropDash.contentsScale = scale
+
+        dropText.string = label
+        dropText.foregroundColor = color.cgColor
+        dropText.fontSize = 16
+        dropText.contentsScale = scale
+        let th: CGFloat = 22
+        dropText.frame = CGRect(x: 0, y: (gb.height - th) / 2, width: gb.width, height: th)
     }
 
     private func drawDropZone(in rect: NSRect, label: String, stroke: NSColor, text: NSColor, animated: Bool) {
@@ -976,17 +1046,21 @@ final class NotchContentView: NSView {
             }
         }
 
-        // 3) ＋ слева от превью.
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        defer { CATransaction.commit() }
+
+        // 3) ＋ слева от превью — Liquid Glass (капсула).
         let plus = NSRect(x: preview.minX - sideGap - 32, y: preview.minY, width: 32, height: 32)
         plusChipRect = plus
-        entrance(center: NSPoint(x: plus.midX, y: plus.midY), delay: 0.1) {
-            drawFloatingPill(plus, color: self.pillBg(self.hoveredKind == .plus))
-            addFolderImage?.draw(in: NSRect(x: plus.midX - 8, y: plus.midY - 8, width: 16, height: 16),
-                                 from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
-        }
+        let pp = ensurePlusPill()
+        pp.isHidden = false
+        pp.configure(image: addFolderImage, text: "", radius: plus.height / 2)
+        applyPop(pp, fullRect: plus, delay: 0.1)
 
-        // 4) Колонка папок справа от превью, вертикально (стаггер).
+        // 4) Колонка папок справа — Liquid Glass-пиллы (капсулы).
         folderChipRects = []
+        ensureFolderPills(folders.count)
         let colX = preview.maxX + sideGap
         var y = preview.minY
         for (i, f) in folders.enumerated() {
@@ -994,17 +1068,11 @@ final class NotchContentView: NSView {
             let w = folderPillWidth(nm)
             let chip = NSRect(x: colX, y: y, width: w, height: 32)
             folderChipRects.append((chip, nm))
-            entrance(center: NSPoint(x: chip.midX, y: chip.midY), delay: 0.12 + CGFloat(i) * 0.04) {
-                drawFloatingPill(chip, color: self.pillBg(self.hoveredKind == .folder(nm)))
-                let iconRect = NSRect(x: chip.minX + 8, y: chip.midY - 8, width: 16, height: 16)
-                if movedFolder == nm {
-                    drawIconPop(approveFolderGreen, in: iconRect, progress: chipCheckProgress)
-                } else {
-                    folderImage?.draw(in: iconRect, from: .zero, operation: .sourceOver,
-                                      fraction: 1, respectFlipped: true, hints: nil)
-                }
-                nm.draw(at: NSPoint(x: iconRect.maxX + 6, y: chip.midY - 7), withAttributes: chipNameAttrs)
-            }
+            let gp = folderPills[i]
+            gp.isHidden = false
+            gp.configure(image: movedFolder == nm ? approveFolderGreen : folderImage,
+                         text: nm, radius: chip.height / 2)
+            applyPop(gp, fullRect: chip, delay: 0.12 + CGFloat(i) * 0.04)
             y += 32 + 8
         }
     }
