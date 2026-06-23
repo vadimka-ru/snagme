@@ -111,9 +111,18 @@ final class NotchWindow: NSWindow {
     private func setExpanded(_ expanded: Bool) {
         guard expanded != isExpandedState else { return }
         isExpandedState = expanded
-        if expanded { ignoresMouseEvents = false }
-        animateFrame(to: expanded ? expandedFrame : collapsedFrame) { [weak self] in
-            if !expanded { self?.ignoresMouseEvents = true }
+        if expanded {
+            // Мгновенно полный размер; элементы выпрыгивают pop-разлётом.
+            ignoresMouseEvents = false
+            setFrame(expandedFrame, display: true)
+            contentViewCustom.openPanel()
+        } else {
+            // Контент уезжает в челку, затем сворачиваем окно.
+            contentViewCustom.setRevealed(false) { [weak self] in
+                guard let self else { return }
+                self.setFrame(self.collapsedFrame, display: true)
+                self.ignoresMouseEvents = true
+            }
         }
     }
 
