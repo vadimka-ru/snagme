@@ -95,21 +95,13 @@ final class NotchWindow: NSWindow {
         NSLog("SnagMe ⌥Space: drag pb → urls=\(urls.map { $0.lastPathComponent }), images=\(imgs?.count ?? 0)")
 
         if contentViewCustom.handlePasteboard(pb, fromHotkey: true) {
-            cancelDrag() // отменяем драг — иначе отпустишь над браузером и он откроет картинку
+            DragCatcher.shared.begin() // ловим отпускание драга, чтобы не дропнулось в браузер
             presentCapture()
         } else if let shot = latestScreenshot() {
             // Драг пуст, но недавно сделан скриншот — берём файл с диска.
             contentViewCustom.captureURLs([shot])
             presentCapture()
         }
-    }
-
-    // Отмена активного drag-and-drop (Escape). Требует Accessibility.
-    private func cancelDrag() {
-        let src = CGEventSource(stateID: .combinedSessionState)
-        let esc: CGKeyCode = 53
-        CGEvent(keyboardEventSource: src, virtualKey: esc, keyDown: true)?.post(tap: .cgSessionEventTap)
-        CGEvent(keyboardEventSource: src, virtualKey: esc, keyDown: false)?.post(tap: .cgSessionEventTap)
     }
 
     private func presentCapture() {
