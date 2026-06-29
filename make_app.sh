@@ -32,8 +32,10 @@ mkdir -p "$DEST/Contents/Resources"
 
 cp "$PROJECT_DIR/.build/release/$APP_NAME" "$DEST/Contents/MacOS/$APP_NAME"
 cp "$PROJECT_DIR/Sources/SnagMe/Resources/Info.plist" "$DEST/Contents/Info.plist"
-# SVG-иконки лежат в SwiftPM resource-бандле; кладём его рядом с бинарём (Bundle.module).
-cp -R "$PROJECT_DIR/.build/release/${APP_NAME}_${APP_NAME}.bundle" "$DEST/Contents/MacOS/"
+# SVG-иконки в SwiftPM resource-бандле. Bundle.module ищет его в Bundle.main.resourceURL
+# (= Contents/Resources). Кладём ТОЛЬКО туда — бандл в Contents/MacOS ломает codesign
+# («code has no resources but signature indicates they must be present»).
+cp -R "$PROJECT_DIR/.build/release/${APP_NAME}_${APP_NAME}.bundle" "$DEST/Contents/Resources/"
 cp "$PROJECT_DIR/AppIcon.icns" "$DEST/Contents/Resources/AppIcon.icns"
 
 # Подпись: стабильная самоподписанная "SnagMe Dev" (если есть) → разрешения держатся

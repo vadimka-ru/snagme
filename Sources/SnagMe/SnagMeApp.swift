@@ -19,7 +19,6 @@ struct SnagMeApp {
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem?
     private var notchWindow: NotchWindow?
-    private var hotKey: HotKey?
     private var doubleShift: DoubleShift?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -31,13 +30,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         window.show()
         self.notchWindow = window
 
-        // Глобальный хоткей ⌥Space — захват из текущего драга.
-        let hk = HotKey()
-        hk.onPress = { [weak self] in self?.notchWindow?.captureFromDrag() }
-        hk.register()
-        self.hotKey = hk
-
-        // Двойной Shift (удобнее в драге). Требует Accessibility для глобального монитора.
+        // Захват из драга — только двойной Shift (⌥Space убран: конфликтует с
+        // неразрывным пробелом в Figma/тексте). Требует Accessibility для глоб. монитора.
         let ds = DoubleShift()
         ds.onTrigger = { [weak self] in self?.notchWindow?.captureFromDrag() }
         ds.start()
