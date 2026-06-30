@@ -1,3 +1,13 @@
 .build/
 *.xcuserstate
 .DS_Store
+# build artifacts
+.build/
+
+# video source (converted to mp4/webm)
+docs/snagme movie.mov
+
+# preview config
+.claude/launch.json
+
+.claude/
